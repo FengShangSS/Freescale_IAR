@@ -1,0 +1,768 @@
+/*********************************************************************************************************************
+*   
+*   直立电感小车  KEA128 - 80PIN
+*
+*   红树伟业   2017.11
+* 
+********************************************************************************************************************/
+
+#include "headfile.h"
+
+#define ANGLE_CONTROL_OUT_MAX	 6000
+#define ANGLE_CONTROL_OUT_MIN	-6000
+
+#define SpeedOUTMAX     1000
+#define SpeedOUTMIN     -1000
+
+#define TurnOUTMAX   2200
+#define TurnOUTMIN  -2200
+
+#define MOTOR_OUT_MAX   7000
+#define MOTOR_OUT_MIN  -7000
+
+
+
+
+uint16 dcnt,ledcnt;
+
+// 转向AD控制参数
+int16   AD_val_1=0;
+int16   AD_val_2=0;
+int16   AD_val_3=0;
+int16   adtmp1,adtmp2,adtmp3;
+int16   dis_AD_val_1,dis_AD_val_2,dis_AD_val_3 ;
+int16   disgy_AD_val_1,disgy_AD_val_2,disgy_AD_val_3 ;
+int16   AD_val_1_min;
+int16   AD_val_2_min;
+int16   AD_val_3_min;
+
+int16   AD_val_1_max;
+int16   AD_val_2_max;
+int16   AD_val_3_max; 
+
+int16 GYROSCOPE_OFFSET_X;
+int16 GYROSCOPE_OFFSET_Z;
+int16 angle6550,angle_x;
+int16 xgout=1000;   //MPU6050六轴参数  x轴角速度
+int16 ygout=1000;
+int16 zgout=1000;
+int16 xaout=-1000;   //x轴加速度
+int16 yaout=-1000;
+int16 zaout=-1000;
+int16 GRAVITY_OFFSET = 330;  //小车平衡时角度值
+int16 disangle,disgyro;
+float  g_fGravityAngle;
+//float  gyroscope_rate = 0,gyroscope_rat = 0;
+//extern uint32 i2cget;
+uint8 sendjd;
+uint32 starttime,endtime,worktime;  //用于计时
+
+uint16  ANGLE_P = 450;//* 260    //直立P  260
+uint16  ANGLE_D = 120;//1.5;//*  4.8   //直立D  5.8
+uint16  DeadPWM = 0;  //电机死区PWM
+int16  Angle_POUT,Angle_DOUT;
+
+//******Kalman滤波******//
+//-------------------------------------------------------
+static  float Q_angle=0.001, Q_gyro=0.001, R_angle=5, dt=0.005;
+	//Q增大，动态响应增大
+static float Pk[2][2] = { {1, 0}, {0, 1 }};
+static float Pdot[4] ={0,0,0,0};
+static float q_bias=0, angle_err, PCt_0, PCt_1, E, K_0, K_1, t_0, t_1;
+float Angle=0,Angle_Speed=0,Car_Angle=0;
+float Turn_Speed;
+int16 disTurn_Speed;
+
+
+float Q =1,R =3800;//3900;//4300;    //调整卡尔曼的滞后 3900  
+static float RealData = 0,RealData_P =10000;
+float NowData = 0,NowData_P =0 ;
+float Kg = 0;
+
+////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////控制参数 ////////////////
+uint16 rkp3= 32;  //   5  转向PD参数 直道 放大10倍
+uint16 rkd3= 10; // 160
+
+uint16 rkp2=35;    //9  转向PD参数 小弯道
+uint16 rkd2=6;  //100; //130
+
+uint16 rkp1=40;    //6  转向PD参数 大弯道
+uint16 rkd1=4;  //45
+
+uint16  DuoP;   //
+uint16  DuoD;
+
+uint16 TurnD = 20;
+
+uint16  Dir_last;
+int16  dir_error_pre=0;
+int16  dir_error=0;
+int16  dis_error;
+unsigned char zz;
+
+int16 turnpwm;  //转向PWM值
+int16 tmpturnpwm;
+
+int16 setspeedhigh = 350;//650;
+int16 setspeedmid = 350;//550;
+int16 setspeedlow  = 350;//500;
+int16 dianjiorgpwm = 800;
+
+int16 leftspeed,rightspeed;
+int16 sumleftspeed,sumrightspeed;
+int16 nowspeed;
+int16 disleftspeed,disrightspeed;
+uint16 speedcnt;
+
+int16 setspeed;  //当前设定速度
+int16 aimspeed;
+
+uint16 speedkp  = 5;
+uint16 speedkd  = 1;  //速度调节PD值
+int16 SpeedPWMOUT;
+int16 newspeedpwm;   //速度PWM
+int16 oldspeedpwm1;   //上次速度PWM
+int16 oldspeedpwm2;   //前次速度PWM
+int16 oldspeedpwm3;   //前前次速度PWM
+int16 speederr,oldspeederr;  //速度差，上次速度差
+
+
+int16 leftpwm,rightpwm;//左右轮的PWM输出值
+
+int16 countcnt;
+uint8 countflag;
+////////////////////   角度控制参数      /////////////////////////
+uint8 AngleControlflag;  //角度控制标志 0： 不控制（当小车倒地时）   1：角度控制
+int16 g_fAngleControlOut = 0;
+int16 fValue; 
+int16 AAngPWM,LastAAngPWM;
+int32 PWMout;  //左右PWM输出的和
+int32 LeftMotorOut ,RightMotorOut ;
+
+/////////////////////////////////////////////////////////////////////////
+
+int16 MPU6050_Get_Angle(float x,float y,float z,uint8 dir);
+void AngleCalculate(void);
+void Kalman_Filter(float angle_m,float gyro_m);
+void delayms(uint32  ms);
+void MPU6050_Init(void);
+int16 MPU6050_GetDoubleData(uint8 Addr);
+void getangle();
+void GPIO_Init();
+void PWM_Init();
+void FTM_Init();
+void AD_Init();
+void get_min();
+void get_max();
+void run();
+void disnowval();
+void speedcal();      //速度控制
+void roadturncal();   //转向控制程序
+void progtime();  //测试各个函数运行时间
+void AngleControl(); //角度控制
+void MotorSpeedOut(int16 anglePWM ,int16 speedPWM ,int16 turnPWM);
+
+int main(void)
+{   int16 ii;
+    int32 xgtemp,zgtemp;
+    AngleControlflag=0;
+    get_clk();              //获取时钟频率 必须执行
+    DisableInterrupts;   //禁止总中断 
+    delayms(1000);
+    GPIO_Init();
+    PWM_Init();
+    FTM_Init();
+    OLED_Init();
+    //uart_init(uart1,115200);
+    pit_init_ms(pit0,5);/// 定时器0中断 5ms
+    //pit_init_us(pit0,100);
+    set_irq_priority(PIT_CH0_IRQn,1);	//设置pit0优先级
+    //enable_irq(PIT_CH0_IRQn);			//开启pit0中断c
+    AD_Init();
+    OLED_Fill(0x00);
+//    uart_putchar(uart1,'S');
+//    uart_putchar(uart1,'y');
+//    uart_putchar(uart1,'s');
+//    uart_putchar(uart1,'O');
+//    uart_putchar(uart1,'K');
+    /////////////////////////
+    MYI2C_init();
+    MPU6050_Init(); 
+    xgtemp=0;
+    zgtemp=0;
+    for(ii=0;ii<100;ii++)
+    {  xgtemp += MPU6050_GetDoubleData(GYRO_XOUT_H);//读x轴角速度，转向
+       i2c_delay();
+       zgtemp += MPU6050_GetDoubleData(GYRO_ZOUT_H);//读z轴角速度，转向
+       i2c_delay();
+    }
+    GYROSCOPE_OFFSET_X = -230;//xgtemp/100;        //静态X轴角速度值，直立，理论上为0，但实际可能不为0
+    GYROSCOPE_OFFSET_Z = 13;//zgtemp/100;        //静态X轴角速度值，直立，理论上为0，但实际可能不为0
+    OLED_P6x8Str(0,0,"Xg_org:");
+    OLED_Print_Num1(50,0,GYROSCOPE_OFFSET_X);
+    OLED_Print_Num1(90,0,GYROSCOPE_OFFSET_Z);
+    EnableInterrupts;
+    ///// 检测电感最小值  /////////
+    OLED_P6x8Str(0,2,"Set  Min  ADVAL");
+    //get_min();
+    AD_val_1_min =0;
+    AD_val_2_min =0;
+    AD_val_3_min =0;
+    AD_val_1_max = 1600;
+    AD_val_2_max = 1600;
+    AD_val_3_max = 1600;
+    ///////  检测电感最大值
+    OLED_P6x8Str(0,4,"Set  Max  ADVAL");
+    //get_max();
+    ///////  清屏，显示当前测量值，摇杆向下小车开始前进  ///
+   //OLED_Fill(0x00);
+    OLED_P6x8Str(0,1,"L_max       L_min");
+    OLED_P6x8Str(0,2,"R_max       R_min");
+    OLED_P6x8Str(0,3,"C_max       C_min");
+    OLED_Print_Num1(30,1,AD_val_1_max);
+    OLED_Print_Num1(90,1,AD_val_1_min);
+    OLED_Print_Num1(30,2,AD_val_2_max);
+    OLED_Print_Num1(90,2,AD_val_2_min);    
+    OLED_Print_Num1(30,3,AD_val_3_max);
+    OLED_Print_Num1(90,3,AD_val_3_min); 
+    while(1)
+    { adtmp1=0;
+      adtmp2=0;
+      adtmp3=0;
+      for(ii=0;ii<15;ii++)
+      {
+        AD_val_1 = ad_ave(ADC0_SE14, ADC_12bit,30);  // left
+        AD_val_2 = ad_ave(ADC0_SE4, ADC_12bit,30);   //right
+        AD_val_3 = ad_ave(ADC0_SE6, ADC_12bit,30);   //mid
+        adtmp1= adtmp1+ AD_val_1;
+        adtmp2= adtmp2+ AD_val_2;
+        adtmp3= adtmp3+ AD_val_3;
+      } 
+      AD_val_1 = adtmp1/15;
+      AD_val_2 = adtmp2/15;
+      AD_val_3 = adtmp3/15;
+      if(AD_val_1>AD_val_1_max)		AD_val_1=AD_val_1_max;
+      if(AD_val_2>AD_val_2_max)		AD_val_2=AD_val_2_max;
+      if(AD_val_3>AD_val_3_max)		AD_val_3=AD_val_3_max;
+      if(AD_val_1<AD_val_1_min)		AD_val_1=AD_val_1_min;
+      if(AD_val_2<AD_val_2_min)		AD_val_2=AD_val_2_min;			  
+      if(AD_val_3<AD_val_3_min)		AD_val_3=AD_val_3_min;
+       //归一化
+      dis_AD_val_1=100*(AD_val_1 - AD_val_1_min)/(AD_val_1_max-AD_val_1_min);
+      dis_AD_val_2=100*(AD_val_2 - AD_val_2_min)/(AD_val_2_max-AD_val_2_min);
+      dis_AD_val_3=100*(AD_val_3 - AD_val_3_min)/(AD_val_3_max-AD_val_3_min);
+
+      OLED_P6x8Str(0,4, "Val:");
+      OLED_Print_Num1(0,5,AD_val_1);
+      OLED_Print_Num1(40,5,AD_val_3);
+      OLED_Print_Num1(80,5,AD_val_2);
+      OLED_P6x8Str(0,6, "GuiYi:");
+      OLED_Print_Num1(0,7,dis_AD_val_1);
+      OLED_Print_Num1(40,7,dis_AD_val_3);
+      OLED_Print_Num1(80,7,dis_AD_val_2);     
+      delayms(500);
+      if(gpio_get(D0)==0)  
+      {  systick_delay_ms(10);
+         break;
+      }
+    }
+    //// 小车开始前进
+    OLED_Fill(0x00); 
+    OLED_P6x8Str(0,0,"Xg_org:");
+    OLED_Print_Num1(50,0,GYROSCOPE_OFFSET_X);
+    OLED_P6x8Str(0,1,"CAR Spd:");
+    OLED_P6x8Str(0,3,"AD:");
+    OLED_P6x8Str(0,4,"GY:");
+    OLED_P6x8Str(0,5,"Ang:");
+    OLED_P6x8Str(0,6,"TurnPWM");
+    OLED_P6x8Str(0,7,"APM");
+    enable_irq(PIT_CH0_IRQn);			//开启pit0中断
+    while(1)
+    {  disnowval();
+       //progtime();
+       delayms(50);
+    }
+}
+
+void progtime()  //测试各个函数运行时间
+{
+///////////  测试程序需要时间 ////////////////////
+      countcnt=0;
+      countflag=1;
+/////////  任务开始  //////////////////////
+      //speedcal();     //速度控制
+      getangle();
+      AngleControl();  //直立控制 
+      roadturncal();   //转向控制
+//////// 任务结束  ////////////////////////
+      countflag=0;
+      OLED_Print_Num1(80,7,countcnt);  
+//    ////////////////////////////////////////////
+}
+
+void GPIO_Init()
+{ SIM->SOPT0 = SIM->SOPT0 & 0xfffd;   
+  //LED
+  gpio_init(B1,GPO,0);   
+  gpio_init(D2,GPO,0); 
+  gpio_init(C5,GPO,0); 
+  gpio_init(E5,GPO,0); 
+  
+  // 摇杆按键
+  gpio_init(C2,GPI,1);   //左上
+  gpio_init(B4,GPI,1);   //上
+  gpio_init(B5,GPI,1);   //右上
+  //gpio_init(H0,GPI,1);   //右下
+  //gpio_init(E6,GPI,1);   //下
+  
+  //3个按键
+  gpio_init(D0,GPI,1);   //左上
+  gpio_init(D1,GPI,1);   //上
+  gpio_init(H6,GPI,1);   //右上
+  
+  
+  // 速度方向
+  gpio_init(C6,GPI,1);   //车轮转动方向，新板改为 C6
+  gpio_init(G0,GPI,1);   //车轮转动方向
+  
+}
+///  小车前进 CH0  CH2     小车后退  CH1  CH3
+void PWM_Init()
+{  ftm_pwm_init(ftm2,ftm_ch0,10000,0);  //A0引脚输出50HZ PWM 占空比为百分之（500/FTM0_PRECISON*100）
+   ftm_pwm_init(ftm2,ftm_ch1,10000,0);  //A0引脚输出50HZ PWM 占空比为百分之（500/FTM0_PRECISON*100）
+   ftm_pwm_init(ftm2,ftm_ch2,10000,0);  //A0引脚输出50HZ PWM 占空比为百分之（500/FTM0_PRECISON*100）
+   ftm_pwm_init(ftm2,ftm_ch3,10000,0);  //A0引脚输出50HZ PWM 占空比为百分之（500/FTM0_PRECISON*100）
+}
+
+void FTM_Init()
+{   ftm_count_init(ftm0);  //对E0引脚输入的脉冲进行计数
+    ftm_count_init(ftm1);  //对E7引脚输入的脉冲进行计数
+}
+
+void AD_Init()
+{  //adc_init(ADC0_SE4);
+   //adc_init(ADC0_SE6);
+   //adc_init(ADC0_SE6);
+   adc_init(ADC0_SE14);  //左
+   adc_init(ADC0_SE6);  //中
+   adc_init(ADC0_SE4);  //右
+}
+void get_min()
+{  uint16 i;
+   uint32 sum=0;
+   for(i=0;i<50;i++)   //Left-Min
+   {
+     AD_val_1 = adc_once(ADC0_SE14,ADC_12bit);
+     sum+=AD_val_1;
+     delayms(5);
+   }
+   AD_val_1_min=sum/50;
+   sum=0;
+   for(i=0;i<50;i++)   //Right-Min
+   {
+     AD_val_2 = adc_once(ADC0_SE4,ADC_12bit);
+     sum+=AD_val_2;
+     delayms(5);
+   }
+   AD_val_2_min=sum/50;
+   sum=0;
+   for(i=0;i<50;i++)   //Middle-Min
+   {
+     AD_val_3 = adc_once(ADC0_SE6,ADC_12bit);	
+     sum+=AD_val_3;
+     delayms(5);
+   }
+   AD_val_3_min=sum/50;
+   sum=0;
+}
+
+void get_max()
+{  uint16 i;
+   for(i=0;i<1200;i++)
+   {
+     AD_val_1 = adc_once(ADC0_SE14,ADC_12bit);;  //左电感
+     if(AD_val_1>=AD_val_1_max) 
+       AD_val_1_max=AD_val_1;
+     delayms(1);
+     AD_val_2 = adc_once(ADC0_SE4,ADC_12bit);;  //右电感
+     if(AD_val_2>=AD_val_2_max) 
+       AD_val_2_max=AD_val_2;
+     delayms(1);
+     AD_val_3 =  adc_once(ADC0_SE6,ADC_12bit);; //中间电感	
+     if(AD_val_3>=AD_val_3_max) 
+       AD_val_3_max=AD_val_3;
+     delayms(1);
+   }
+}
+
+void disnowval()   //   左AD1    中AD3    右AD2          
+{  
+   OLED_Print_Num1(90,0,disgyro);  //X轴角速度
+   OLED_Print_Num1(48,1,disleftspeed);
+   OLED_Print_Num1(90,1,disrightspeed);
+   OLED_Print_Num1(0,2,Dir_last);
+   OLED_Print_Num1(48,2,nowspeed);
+   OLED_Print_Num1(90,2,newspeedpwm);
+   OLED_Print_Num1(16,3,dis_AD_val_1);
+   OLED_Print_Num1(55,3,dis_AD_val_3);
+   OLED_Print_Num1(90,3,dis_AD_val_2);
+   OLED_Print_Num1(16,4,disgy_AD_val_1);
+   OLED_Print_Num1(55,4,disgy_AD_val_3);
+   OLED_Print_Num1(90,4,disgy_AD_val_2);
+   OLED_Print_Num1(30,5,angle_x);
+   OLED_Print_Num1(80,5,disangle);
+   OLED_Print_Num1(50,6,turnpwm); 
+   OLED_Print_Num1(90,6,dis_error);  
+   OLED_Print_Num1(16,7,AAngPWM);
+   OLED_Print_Num1(55,7,Angle_POUT);
+   OLED_Print_Num1(90,7,Angle_DOUT);
+
+}
+
+void MPU6050_Init(void)
+{
+//  i2c_init(i2c0,300*1000);
+//  i2c_write_reg(i2c0, MPU6050_DEV_ADDR, PWR_MGMT_1,0x00);     //写入数据2到0x50地址，从机地址为0x2D
+//  i2c_write_reg(i2c0, MPU6050_DEV_ADDR, PWR_MGMT_2,0x00);     //写入数据2到0x50地址，从机地址为0x2D
+//  i2c_write_reg(i2c0, MPU6050_DEV_ADDR, CONFIG,0x06);         //写入数据2到0x50地址，从机地址为0x2D
+//  i2c_write_reg(i2c0, MPU6050_DEV_ADDR, GYRO_CONFIG,0x08);    //写入数据2到0x50地址，从机地址为0x2D
+//  i2c_write_reg(i2c0, MPU6050_DEV_ADDR, ACCEL_CONFIG,0x08);   //写入数据2到0x50地址，从机地址为0x2D
+  
+  MYI2C_writereg(MPU6050_DEV_ADDR, PWR_MGMT_1,0x00);
+  MYI2C_writereg(MPU6050_DEV_ADDR, PWR_MGMT_2,0x00);
+  MYI2C_writereg(MPU6050_DEV_ADDR, CONFIG,0x06);
+  MYI2C_writereg(MPU6050_DEV_ADDR, GYRO_CONFIG,0x08);
+  MYI2C_writereg(MPU6050_DEV_ADDR, ACCEL_CONFIG,0x08);
+}
+
+int16 MPU6050_GetDoubleData(uint8 Addr)   //uint8 value = i2c_read_reg(i2c0, 0x2D, 0x50)
+{
+  uint16 data=0x0000;
+  //data=i2c_read_reg(i2c0,MPU6050_DEV_ADDR, Addr);
+  //data=(uint16)((data<<8)&0xff00);
+  //data+=i2c_read_reg(i2c0,MPU6050_DEV_ADDR, Addr+1);
+  data = MYI2C_readreg(MPU6050_DEV_ADDR, Addr);
+  data=(uint16)((data<<8)&0xff00);
+  data += MYI2C_readreg(MPU6050_DEV_ADDR, Addr+1);
+  return (int16)data;//合成数据，为有符号整形数
+}
+
+int16 MPU6050_Get_Angle(float x,float y,float z,uint8 dir) 
+{           
+  float temp;    
+  float res=0;
+  switch(dir)  
+  {  case 0://与自然Z轴的角度
+              temp=sqrt((x*x+y*y))/z;
+              res=atan(temp);
+              break;
+     case 1://与自然X轴的角度  
+             temp=x/sqrt((y*y+z*z));
+             res=atan(temp);
+             break;
+     case 2://与自然Y轴的角度        
+            temp=y/sqrt((x*x+z*z));
+            res=atan(temp);
+            break;
+  }
+  return (res*1800/3.1416);//把弧度转换成角度,并放大10倍
+}
+
+
+void AngleCalculate(void)  //增量式卡尔曼算法
+{
+     Angle =  (angle6550-GRAVITY_OFFSET)/10;  //MPU6550计算出的Z轴角度，放大10倍值
+     disangle = angle6550-GRAVITY_OFFSET;  
+     Angle_Speed =  (xgout - GYROSCOPE_OFFSET_X)/70;  //X轴角速度输出值, 500度--> 65.5 = 65535/1000
+     disgyro = Angle_Speed * 1;
+     //gyroscope_rate = Angle_Speed;  //当前角速度
+     //gyroscope_rat =gyroscope_rat + gyroscope_rate * 0.005; //-    //积分角速度得到角度
+     //angle_w = gyroscope_rate*1;
+//卡尔曼五个公式的算法实现                                                                              
+     NowData = RealData + Angle_Speed*0.005;  // 
+     NowData_P = Q+RealData_P;
+     Kg = NowData_P/(NowData_P+R);
+     RealData = NowData + Kg*(Angle - NowData);
+     RealData_P = (1-Kg)*NowData_P;
+     Car_Angle =  RealData;    //将准确角度结果给QingJiao
+     angle_x = Car_Angle*10;   //角度 ，串口显示用
+//     g_fCarAngle = Car_Angle;  //允许角度控制 
+//进行积分                                                            积分时间小，受加速度计影响大                      
+}
+
+//void AngleCalculate(void)   //标准卡尔曼算法
+//{
+//     Angle =  (angle6550-GRAVITY_OFFSET)/10;  //MPU6550根据加速度计算出的Z轴角度
+//     disangle = (angle6550-GRAVITY_OFFSET);  //加速度计算出的角度,放大10倍值
+//     Angle_Speed  =   (xgout - GYROSCOPE_OFFSET_X)/70; // /70;//*0.048;  //X轴角速度输出值, 500度--> 65.5 = 65535/1000
+//     disgyro = Angle_Speed * 1;   //角速度显示值
+//     Kalman_Filter(Angle,Angle_Speed);            //调用卡尔曼滤波函数 
+//     angle_x = Car_Angle*10;  //融合后的实际角度
+//}
+//
+//void Kalman_Filter(float angle_m,float gyro_m)			
+//{
+//	Car_Angle+=(gyro_m-q_bias) * dt; ///预测值
+//	Pdot[0]=Q_angle - Pk[0][1] - Pk[1][0];
+//	Pdot[1]=- Pk[1][1];
+//	Pdot[2]=- Pk[1][1];
+//	Pdot[3]=Q_gyro;
+//	
+//	Pk[0][0] += Pdot[0] * dt;
+//	Pk[0][1] += Pdot[1] * dt;
+//	Pk[1][0] += Pdot[2] * dt;
+//	Pk[1][1] += Pdot[3] * dt;
+//	
+//	angle_err = angle_m -Car_Angle;///测量值-预测值
+//	
+//	PCt_0 =  Pk[0][0];
+//	PCt_1 =  Pk[1][0];
+//	
+//	E = R_angle + PCt_0;
+//	
+//	K_0 = PCt_0 / E; ///卡尔曼增益
+//	K_1 = PCt_1 / E;
+//	
+//	t_0 = PCt_0;
+//	t_1 = Pk[0][1];
+//
+//	Pk[0][0] -= K_0 * t_0;
+//	Pk[0][1] -= K_0 * t_1;
+//	Pk[1][0] -= K_1 * t_0;
+//	Pk[1][1] -= K_1 * t_1;
+//	
+//	Car_Angle+= K_0 * angle_err; ///最优角度=预测值+卡尔曼增益*(测量值-预测值)
+//	q_bias	+= K_1 * angle_err;
+//	Angle_Speed = gyro_m-q_bias;
+//}
+
+void getangle()
+{ 
+  xaout=MPU6050_GetDoubleData(ACCEL_XOUT_H);//读X轴加速度
+  yaout=MPU6050_GetDoubleData(ACCEL_YOUT_H);//读X轴加速度
+  zaout=MPU6050_GetDoubleData(ACCEL_ZOUT_H);//读X轴加速度 
+  xgout=MPU6050_GetDoubleData(GYRO_XOUT_H);//读X轴角速度,直立角速度
+  zgout=MPU6050_GetDoubleData(GYRO_ZOUT_H);//读Z轴角速度，转向角速度
+
+  angle6550 = MPU6050_Get_Angle(xaout,yaout,zaout,0);  //加速度计算出当前角度
+
+  AngleCalculate();//计算加速值和角度值
+
+  Turn_Speed =  (zgout - GYROSCOPE_OFFSET_Z)/70;//*0.048;  //X轴角速度输出值, 500度--> 65.5 = 65535/1000
+  disTurn_Speed = Turn_Speed *1;
+}
+
+void  delayms(uint32  ms)
+{
+
+    uint32  i, j;
+    for(i = 0; i < ms; i++)
+    {
+        for(j = bus_clk_khz; j > 0; j--)
+        {
+            asm("nop");
+        }
+    }
+}
+
+void run()   //5ms执行一次
+{  uint8 runmode;
+   dcnt++;
+   if(dcnt>1000)  //5S后允许小车前进
+   { setspeed = aimspeed;
+   }
+   else
+   { setspeed = 0;
+   }
+   //AngleControlflag = 1;
+   ledcnt++;
+   if(ledcnt>=200)  //1S
+   {  gpio_turn(B1); 
+     gpio_turn(D2); 
+     //gpio_turn(E0); 
+     gpio_turn(E5); 
+     ledcnt=0;
+   }  
+   speedcal();            //速度控制
+   
+   getangle();
+   AngleControl();  //直立控制 
+  
+   roadturncal();      //转向控制
+   
+ ///////////  电机输出  ///////////////
+   runmode=4;
+   if(runmode==0)
+      MotorSpeedOut(AAngPWM,0,0);            //测试直立
+   else if(runmode==1)
+      MotorSpeedOut(AAngPWM,SpeedPWMOUT,0);  //测试直立+速度
+   else if(runmode==2)
+      MotorSpeedOut(AAngPWM,0,turnpwm);      //测试 直立+转向
+   else if(runmode==3)
+      MotorSpeedOut(0,SpeedPWMOUT,0);      //测试 速度
+   else
+      MotorSpeedOut(AAngPWM,SpeedPWMOUT,turnpwm);// 正常
+}
+
+void speedcal()
+{   speedcnt++;
+    if(gpio_get(C6)==0)  //左轮正转
+    { leftspeed = ftm_count_get(ftm0);  // PTE0  
+    }
+    else  //左轮反转
+    { leftspeed = -ftm_count_get(ftm0);
+    }
+    ftm_count_clean(ftm0);
+    if(gpio_get(G0)==0)  //右轮正转
+    { rightspeed = -ftm_count_get(ftm1);  //PTE7
+    }
+    else  //右轮反转
+    { rightspeed = ftm_count_get(ftm1);
+    }
+    ftm_count_clean(ftm1);
+    sumleftspeed = sumleftspeed + leftspeed;
+    sumrightspeed = sumrightspeed + rightspeed;
+    if(speedcnt>19)  //  100ms处理一次速度
+    {  speedcnt=0;
+       disleftspeed = sumleftspeed;
+       disrightspeed = sumrightspeed;
+       nowspeed = (sumleftspeed + sumrightspeed)/2;
+       sumleftspeed = 0;
+       sumrightspeed = 0;
+       oldspeedpwm3 = oldspeedpwm2;
+       oldspeedpwm2 = oldspeedpwm1;
+       oldspeedpwm1 = newspeedpwm;
+       oldspeederr = speederr;
+       speederr = setspeed - nowspeed ;
+       newspeedpwm = speedkp * speederr +  speedkd * (speederr-oldspeederr);
+       SpeedPWMOUT = newspeedpwm * 0.8 + oldspeedpwm1 * 0.2;// + oldspeedpwm2 * 0.15 + oldspeedpwm3 * 0.1;  //速度平缓过度
+       if(SpeedPWMOUT>SpeedOUTMAX)   SpeedPWMOUT = SpeedOUTMAX;  //限幅
+       if(SpeedPWMOUT<SpeedOUTMIN)   SpeedPWMOUT = SpeedOUTMIN;
+    }
+}
+
+void roadturncal()  //转向控制程序
+{
+  AD_val_1 = adc_once(ADC0_SE14,ADC_12bit);;  //左电感    
+  AD_val_2 = adc_once(ADC0_SE4,ADC_12bit);;  //右边电感 
+  AD_val_3 = adc_once(ADC0_SE6,ADC_12bit);;  // 中间电感 
+  
+  dis_AD_val_1=AD_val_1;
+  dis_AD_val_2=AD_val_2;
+  dis_AD_val_3=AD_val_3;
+ 
+  //限幅
+  if(AD_val_1>AD_val_1_max)		AD_val_1=AD_val_1_max;
+  if(AD_val_2>AD_val_2_max)		AD_val_2=AD_val_2_max;
+  if(AD_val_3>AD_val_3_max)		AD_val_3=AD_val_3_max;
+ 
+  if(AD_val_1<AD_val_1_min)		AD_val_1=AD_val_1_min;
+  if(AD_val_2<AD_val_2_min)		AD_val_2=AD_val_2_min;			  
+  if(AD_val_3<AD_val_3_min)		AD_val_3=AD_val_3_min;
+  
+  //归一化
+  AD_val_1=100*(AD_val_1 - AD_val_1_min)/(AD_val_1_max-AD_val_1_min);
+  AD_val_2=100*(AD_val_2 - AD_val_2_min)/(AD_val_2_max-AD_val_2_min);
+  AD_val_3=100*(AD_val_3 - AD_val_3_min)/(AD_val_3_max-AD_val_3_min);
+  
+  disgy_AD_val_1 = AD_val_1;
+  disgy_AD_val_2 = AD_val_2;
+  disgy_AD_val_3 = AD_val_3;
+  
+  if(Dir_last==2)  //原来在中间向左右偏离
+  {
+    if( (AD_val_2-AD_val_1)>20)  Dir_last = 1;   //上一状态为右转
+    if( (AD_val_1-AD_val_2)>20)  Dir_last = 0;   //上一状态为左转
+  }
+  if(Dir_last==1)  //大弯或丢线
+  {
+    turnpwm= TurnOUTMAX;
+    aimspeed=setspeedlow;
+    DuoP = rkp3;
+    DuoD = rkd3;
+  }
+  else if(Dir_last==0)
+  {
+    turnpwm = TurnOUTMIN;		//保持左转
+    aimspeed=setspeedlow;
+    DuoP = rkp3;
+    DuoD = rkd3;
+  }
+  //正常处理
+  if(AD_val_1>40||AD_val_3>40||AD_val_2>40)  //???????? 只用左边和中间 ?????
+  {   Dir_last = 2;
+      dir_error_pre=dir_error;                                            //上个偏差
+      dir_error=100*(AD_val_2 - AD_val_1)/(AD_val_2 + AD_val_1);          //偏差量
+      dir_error=dir_error*(dir_error*dir_error/1250.0+2)/10;
+      dis_error=dir_error;
+      if (AD_val_3<50)
+        aimspeed=setspeedlow;
+      else if (AD_val_3<70)
+        aimspeed=setspeedmid;
+      else
+        aimspeed=setspeedhigh;
+      DuoP = rkp3;
+      DuoD = rkd3;  
+      turnpwm =  DuoP * dir_error + DuoD * (dir_error - dir_error_pre) + TurnD * Turn_Speed ;  //电感的差 和 小车转动角速度融合
+      if(turnpwm>TurnOUTMAX)
+        turnpwm=TurnOUTMAX;
+      if(turnpwm<TurnOUTMIN)
+        turnpwm=TurnOUTMIN;
+   } 
+} 
+
+/*********************************************************** 
+函数名称：AngleControl
+***********************************************************/
+void AngleControl(void) 
+{
+   Angle_POUT =  Car_Angle *  ANGLE_P;
+   Angle_DOUT =  Angle_Speed * ANGLE_D;
+      
+   fValue = Angle_POUT + Angle_DOUT;  //角度控制系数   
+   
+   if(fValue > ANGLE_CONTROL_OUT_MAX)       
+       fValue = ANGLE_CONTROL_OUT_MAX;
+   if(fValue < ANGLE_CONTROL_OUT_MIN) 
+       fValue = ANGLE_CONTROL_OUT_MIN;
+   AAngPWM = fValue;
+}
+ 
+void MotorSpeedOut(int16 anglePWM ,int16 speedPWM ,int16 turnPWM)   //左右电机输出
+{
+  int16 speedAvPWM ,turnAvPWM ;
+  speedAvPWM = speedPWM  ;
+  turnAvPWM = turnPWM;///TURNTIMCOUNT ;
+  LeftMotorOut  = anglePWM + speedAvPWM + turnAvPWM ;//直立、速度、方向三者融合，其中速度与直立的符合是相反的，参考官方方案
+  RightMotorOut = anglePWM + speedAvPWM - turnAvPWM ;
+  
+  if(LeftMotorOut > MOTOR_OUT_MAX)//简单限幅
+    LeftMotorOut = MOTOR_OUT_MAX ;
+  else if(LeftMotorOut < MOTOR_OUT_MIN)
+    LeftMotorOut = MOTOR_OUT_MIN ; 
+  if(RightMotorOut > MOTOR_OUT_MAX)
+    RightMotorOut = MOTOR_OUT_MAX ;
+  else if(RightMotorOut < MOTOR_OUT_MIN)
+    RightMotorOut = MOTOR_OUT_MIN ;
+   
+  if(LeftMotorOut >= 0)  //左向前
+  {  ftm_pwm_duty(ftm2,ftm_ch0,LeftMotorOut + DeadPWM);
+     ftm_pwm_duty(ftm2,ftm_ch1,0);
+  }
+  else   //左向后
+  {  ftm_pwm_duty(ftm2,ftm_ch0,0);
+     ftm_pwm_duty(ftm2,ftm_ch1,-LeftMotorOut + DeadPWM);    
+  }
+  if(RightMotorOut >= 0)  //右向前
+  {  ftm_pwm_duty(ftm2,ftm_ch2,RightMotorOut + DeadPWM);
+     ftm_pwm_duty(ftm2,ftm_ch3,0);         
+  }
+  else  //右向后
+  {  ftm_pwm_duty(ftm2,ftm_ch2,0);
+     ftm_pwm_duty(ftm2,ftm_ch3,-RightMotorOut + DeadPWM);      
+  }     
+  PWMout = ((LeftMotorOut +RightMotorOut)/2);
+}
+
